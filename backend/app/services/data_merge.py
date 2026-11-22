@@ -121,6 +121,32 @@ class DataMergeService(BaseModuleService):
 
         return self.merge_and_audit(rule_id, rows_a, rows_b)
 
+    def merge_from_confirmed_worksheet(self, worksheet_id: int) -> dict[str, Any]:
+        """复核链路入口：根据“已确认”的归并差异底稿选出两份导出重做归并。
+
+        与 merge_sources 的关键差异：冲突策略不再在提交时直接套用，
+        发布明细逐行带原行位置与输入对指纹，可回溯到底稿对应的那对输入。
+        """
+        from app.services.merge_worksheet import worksheet_service
+        artifact = worksheet_service.publish_merge(worksheet_id)
+
+        # 联动增强：确认底稿归并同样写入 call_audit，保留导出->归并->审计链路
+        from app.services.data_manager import write_audit, DATA_ROOT
+        audit_id = max((int(f.stem) for f in DATA_ROOT.glob("audit/[0-9]*.json")), default=0) + 1
+        write_audit(audit_id, {
+            "audit_id": audit_id,
+            "api_name": artifact["source_pair"]["primary"].get("api_name", ""),
+            "caller": "data_merge",
+            "event": "merge_from_confirmed_worksheet",
+            "worksheet_id": worksheet_id,
+            "published_id": artifact["published_id"],
+            "input_pair_id": artifact["input_pair_id"],
+            "merged_count": artifact["row_count"],
+            "primary_batch": artifact["source_pair"]["primary"].get("batch_no", ""),
+            "secondary_batch": artifact["source_pair"]["secondary"].get("batch_no", ""),
+        })
+        return artifact
+
     def run_action(self, entry_id: int, action: str) -> tuple[dict[str, Any] | None, str]:
         entry = store.find(self.MODULE, entry_id)
         if entry is None:
